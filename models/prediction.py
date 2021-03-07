@@ -45,9 +45,9 @@ class PredModel(nn.Module):
         y_hat, (self.h_n, self.c_n) = self.lstm(x)
         return y_hat
 
-    def infer(self, lstm_out, x):
-        lstm_out, ls = pad_packed_sequence(lstm_out, batch_first=BATCH_FIRST)
-        x, ls = pad_packed_sequence(x, batch_first=BATCH_FIRST)
+    def infer(self, lstm_out, x, mask):
+        lstm_out, _ = pad_packed_sequence(lstm_out, batch_first=BATCH_FIRST)
+        x, _ = pad_packed_sequence(x, batch_first=BATCH_FIRST)
         lstm_out = lstm_out[:, :-1, :]  # discard last one
         e_t = lstm_out[..., 0]
         mp = lstm_out[..., 1:]
@@ -56,15 +56,28 @@ class PredModel(nn.Module):
         ws = nn.LogSoftmax(-1)(ws).view(b, s, self.num_mixtures)
         means = means.view(b, s, self.num_mixtures, 2)
         std = log_std.exp().view(b, s, self.num_mixtures, 2)
-        corr = corr.tanh().view(b, s, self.num_mixtures, 1)
-        std_1 = std[..., -2:-1] ** 2
-        std_2 = std[..., -1:] ** 2
+        corr = corr.tanh().view(b, s, self.num_mixtures, 1)  # + 1e-7
+        std_1 = std[..., -2:-1] ** 2  # + 1e-7
+        std_2 = std[..., -1:] ** 2  # + 1e-7
         covariance_mat = torch.cat(
             [std_1, std_1 * std_2 * corr, std_1 * std_2 * corr, std_2], axis=-1
         ).view(b, s, self.num_mixtures, 2, 2)
+
+        # apply mask
+        # new_mask = mask[:, :-1]
+        seq_len = mask.sum(-1)
+        mask = mask.reshape(-1)
+        means = means.reshape(-1, *means.shape[-2:])[mask]
+        covariance_mat = covariance_mat.reshape(-1, *covariance_mat.shape[-3:])[mask]
+
         dist = MultivariateNormal(means, covariance_matrix=covariance_mat)
         # pred = dist.sample()
-        prob = dist.log_prob(x[:, 1:, :].unsqueeze(-2))
-        prob = ws + prob
+        new_ws = ws.reshape(-1, ws.shape[-1])[mask]
+        new_x = x[:, 1:, :].reshape(-1, x.shape[-1])[mask]
+        prob = dist.log_prob(new_x.unsqueeze(-2))
+        prob = new_ws + prob
         prob = torch.logsumexp(prob, -1)
-        return prob, e_t, ls
+        seq_prob = torch.stack(
+            [x.sum() for x in torch.split(prob, seq_len.tolist(), 0)]
+        ).mean()
+        return seq_prob, e_t

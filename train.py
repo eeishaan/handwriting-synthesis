@@ -17,18 +17,18 @@ def train():
     num_epochs = 100
     bce_loss = torch.nn.BCELoss(reduction="mean")
     for epoch in tqdm(range(num_epochs)):
-        for x, labels, mask, total_elem in loader:
+        for x, labels, mask in loader:
             out = model(x)
             model.reset()
-            prob_t, e_t, ls = model.infer(out, x)  # shape = (b,s)
+            prob_t, e_t = model.infer(out, x, mask)  # shape = (b,s)
 
             # calculate loss
             loss = (
-                -(prob_t * mask).sum(-1).mean()
+                -prob_t
                 + binary_cross_entropy_with_logits(
                     input=e_t, target=labels, weight=mask, reduction="sum"
                 )
-                / total_elem
+                / mask.sum()
             )
 
             optim.zero_grad()
