@@ -8,14 +8,16 @@ from constants import BATCH_FIRST
 
 class StrokeDataset(Dataset):
     def __init__(self, file):
-        self.data = np.load(file, allow_pickle=True)
+        self.data = np.load(file, allow_pickle=True, encoding="latin1")
         # TODO: normalize the offsets?
 
     def __len__(self) -> int:
         return len(self.data)
 
     def __getitem__(self, index: int):
-        self.data[index]
+        new_data = np.pad(self.data[index], ((0, 1), (0, 0)))
+        # new_data = self.data[index]
+        return torch.from_numpy(new_data)
 
 
 def collate_sequence(batch):
@@ -25,14 +27,24 @@ def collate_sequence(batch):
     padded = pad_sequence(batch, batch_first=BATCH_FIRST)
 
     # spearate out the labels
-    labels = padded[:, :, 0]
+    labels = padded[:, :-1, 0]  # dont' consider last label
     coordinates = padded[:, :, 1:]
 
     # pack them
-    packed = pack_padded_sequence(coordinates, lens, batch_first=BATCH_FIRST)
+    packed = pack_padded_sequence(
+        coordinates, lens, enforce_sorted=False, batch_first=BATCH_FIRST
+    )
+    # labels = pack_padded_sequence(
+    #     labels, lens, enforce_sorted=False, batch_first=BATCH_FIRST
+    # )
 
+    max_len = padded.shape[1]
+    label_mask = torch.arange(max_len).expand(len(lens), max_len) < torch.Tensor(
+        lens
+    ).unsqueeze(1)
+    label_mask = label_mask[:, :-1]
     # dispatch
-    return packed, labels
+    return packed, labels, label_mask, sum(lens)
 
 
 def get_loader(file, batch_size):
