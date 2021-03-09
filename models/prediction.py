@@ -65,9 +65,11 @@ class PredModel(nn.Module):
 
     @torch.no_grad()
     def generate(self, device):
-        inp = torch.zeros(2, device=device).unsqueeze(0).unsqueeze(0)
-        h_n, c_n = torch.zeros(self.num_layers, 1, self.output_dim), torch.zeros(
-            self.num_layers, 1, self.output_dim
+        inp = torch.randn(2, device=device).unsqueeze(0).unsqueeze(0)
+        # inp = torch.zeros(2, device=device).unsqueeze(0).unsqueeze(0)
+        h_n, c_n = (
+            torch.zeros(self.num_layers, 1, self.output_dim, device=device),
+            torch.zeros(self.num_layers, 1, self.output_dim, device=device),
         )
         out = []
         for _ in range(700):
@@ -76,13 +78,16 @@ class PredModel(nn.Module):
             ws, means, covariance_mat, e_t = self._process_output(y_hat)
 
             ws = ws.squeeze().exp()
+            j = ws.argmax()
+            # dist = Categorical(probs=ws)
+            # j = dist.sample()
 
-            dist = Categorical(probs=ws)
-            j = dist.sample()
-            dist = MultivariateNormal(
-                means[..., j, :], covariance_matrix=covariance_mat[..., j, :, :]
-            )
-            x_nt = dist.sample()
+            # dist = MultivariateNormal(
+            #     means[..., j, :], covariance_matrix=covariance_mat[..., j, :, :]
+            # )
+            # x_nt = dist.sample()
+            x_nt = means[..., j, :]
+            inp = x_nt
             x_nt = x_nt.squeeze(0)
             e_t = e_t.sigmoid()
             e_t[e_t > 0.5] = 1
@@ -114,4 +119,15 @@ class PredModel(nn.Module):
         seq_prob = torch.stack(
             [x.sum() for x in torch.split(prob, seq_len.tolist(), 0)]
         ).mean()
-        return seq_prob, e_t
+
+        # eval mse for xs
+        sse = self.sse_x(new_x.detach(), new_ws.detach(), means.detach())
+        return seq_prob, e_t, sse
+
+    @torch.no_grad()
+    def sse_x(self, target, w, means):
+        w_x = w.argmax(-1)
+        pred = means[..., w_x, :]
+        return nn.functional.mse_loss(
+            target[:, 0], pred[:, 0]
+        ) + nn.functional.mse_loss(target[:, 1], pred[:, 1])
