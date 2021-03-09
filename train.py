@@ -23,14 +23,17 @@ def train():
     # bce_loss = torch.nn.BCELoss(reduction="mean")
     save_dir = pathlib.Path(f"runs/{batch_size}_{lr}_{time.time()}")
     os.makedirs(save_dir)
+    # model.generate(device)
+
     for epoch in tqdm(range(num_epochs)):
         for x, labels, mask in loader:
+            model.train()
             x = x.to(device)
             labels = labels.to(device)
             mask = mask.to(device)
             out = model(x)
             model.reset()
-            prob_t, e_t = model.infer(out, x, mask)  # shape = (b,s)
+            prob_t, e_t, sse = model.infer(out, x, mask)  # shape = (b,s)
 
             # calculate loss
             loss = (
@@ -44,7 +47,8 @@ def train():
             optim.zero_grad()
             loss.backward()
             optim.step()
-        print(f"Epoch {epoch}: Loss {loss.detach()}")
+
+        print(f"Epoch {epoch}: Loss {loss.detach()} | SSE: {sse}")
         # checkpoint weights
         torch.save(
             {"model": model.state_dict(), "optim": optim.state_dict(), "epoch": epoch},
