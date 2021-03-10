@@ -38,7 +38,7 @@ class PredModel(nn.Module):
             self.num_layers, batch_size, self.output_dim, requires_grad=True
         )
         self.c_n = torch.zeros(
-            self.num_layers, batch_size, self.output_dim, requires_grad=True
+            self.num_layers, batch_size, self.hidden_dim, requires_grad=True
         )
 
     def reset(self):
@@ -47,7 +47,7 @@ class PredModel(nn.Module):
 
     def forward(self, x):
         # x is of shape (batch, seq, x)
-        y_hat, (self.h_n, self.c_n) = self.lstm(x)
+        y_hat, (self.h_n, self.c_n) = self.lstm(x, (self.h_n, self.c_n))
         return y_hat
 
     def _process_output(self, lstm_out):
@@ -73,10 +73,11 @@ class PredModel(nn.Module):
         # inp = torch.zeros(2, device=device).unsqueeze(0).unsqueeze(0)
         h_n, c_n = (
             torch.zeros(self.num_layers, 1, self.output_dim, device=device),
-            torch.zeros(self.num_layers, 1, self.output_dim, device=device),
+            torch.zeros(self.num_layers, 1, self.hidden_dim, device=device),
         )
         out = []
-        for _ in range(700):
+        for i in range(700):
+            # print(f"Epoch {i}")
             y_hat, (h_n, c_n) = self.lstm(inp, (h_n, c_n))
 
             ws, means, covariance_mat, e_t = self._process_output(y_hat)
