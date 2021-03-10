@@ -36,24 +36,24 @@ def collate_sequence(batch):
     padded = pad_sequence(batch, batch_first=BATCH_FIRST)
 
     # spearate out the labels
-    labels = padded[:, :-1, 0]  # remove the phi's label
+    labels = padded[:, :, 0]  # remove the phi's label
     coordinates = padded[:, :, 1:]
 
     # pack them
-    packed = pack_padded_sequence(
-        coordinates, lens, enforce_sorted=False, batch_first=BATCH_FIRST
-    )
+    # packed = pack_padded_sequence(
+    #     coordinates, lens, enforce_sorted=False, batch_first=BATCH_FIRST
+    # )
     # labels = pack_padded_sequence(
     #     labels, lens, enforce_sorted=False, batch_first=BATCH_FIRST
     # )
 
-    max_len = padded.shape[1] - 1  # remove the extra phi at the end
+    max_len = padded.shape[1]  # remove the extra phi at the end
     label_mask = torch.arange(max_len).expand(len(lens), max_len) < (
-        torch.Tensor(lens) - 1
+        torch.Tensor(lens)
     ).unsqueeze(1)
     # label_mask = label_mask[:, :-1]
     # dispatch
-    return packed, labels, label_mask
+    return coordinates, labels, label_mask, torch.Tensor(lens)
 
 
 def get_loader(file, batch_size):

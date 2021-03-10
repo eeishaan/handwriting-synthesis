@@ -53,7 +53,9 @@ class PredModel(nn.Module):
 
     def forward(self, x):
         # x is of shape (batch, seq, x)
-        y_hat, (self.h_n, self.c_n) = self.lstm(x, (self.h_n, self.c_n))
+        y_hat, (self.h_n, self.c_n) = self.lstm(
+            x, (self.h_n.detach(), self.c_n.detach())
+        )
         return y_hat
 
     def _process_output(self, lstm_out):
@@ -114,7 +116,6 @@ class PredModel(nn.Module):
         ws, means, covariance_mat, e_t = self._process_output(lstm_out)
 
         # apply mask
-        # new_mask = mask[:, :-1]
         seq_len = mask.sum(-1)
         mask = mask.reshape(-1)
         means = means.reshape(-1, *means.shape[-2:])[mask]

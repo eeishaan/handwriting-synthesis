@@ -1,6 +1,8 @@
+import enum
 import os
 import pathlib
 import time
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 
 import torch
 from torch.nn.functional import binary_cross_entropy_with_logits
@@ -24,29 +26,37 @@ def train():
     save_dir = pathlib.Path(f"runs/{batch_size}_{lr}_{time.time()}")
     os.makedirs(save_dir)
     # model.generate(device)
-
+    bptt_steps = 100
     for epoch in tqdm(range(num_epochs)):
-        for x, labels, mask in loader:
-            model.train()
-            x = x.to(device)
-            labels = labels.to(device)
-            mask = mask.to(device)
-            out = model(x)
-            model.reset()
-            prob_t, e_t, sse = model.infer(out, x, mask)  # shape = (b,s)
-
-            # calculate loss
-            loss = (
-                -prob_t
-                + binary_cross_entropy_with_logits(
-                    input=e_t, target=labels, weight=mask, reduction="sum"
+        model.train()
+        for all_x, all_labels, all_mask, all_lens in loader:
+            xs = torch.split(all_x, bptt_steps, 1)
+            ls = torch.split(all_labels, bptt_steps, 1)
+            ms = torch.split(all_mask, bptt_steps, 1)
+            for i, (x, labels, mask) in enumerate(zip(xs, ls, ms)):
+                new_lens = torch.clamp(all_lens - bptt_steps * i, min=0, max=bptt_steps)
+                x = pack_padded_sequence(
+                    x, new_lens, enforce_sorted=False, batch_first=BATCH_FIRST
                 )
-                / mask.sum()
-            )
+                x = x.to(device)
+                labels = labels[:, :-1].to(device)
+                mask = mask[:, :-1].to(device)
+                out = model(x)
+                prob_t, e_t, sse = model.infer(out, x, mask)  # shape = (b,s)
 
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
+                # calculate loss
+                loss = (
+                    -prob_t
+                    + binary_cross_entropy_with_logits(
+                        input=e_t, target=labels, weight=mask, reduction="sum"
+                    )
+                    / mask.sum()
+                )
+
+                optim.zero_grad()
+                loss.backward()
+                optim.step()
+            model.reset()
 
         print(f"Epoch {epoch}: Loss {loss.detach()} | SSE: {sse}")
         # checkpoint weights
