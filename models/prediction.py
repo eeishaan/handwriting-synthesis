@@ -19,14 +19,18 @@ class PredModel(nn.Module):
         batch_size,
     ):
         super(PredModel, self).__init__()
+        self.hidden_dim = 900
         output_dim = 1 + 6 * num_mixtures
         self.output_dim = output_dim
         self.lstm = nn.LSTM(
             input_size=input_size,
-            hidden_size=output_dim,
+            hidden_size=self.hidden_dim,
             num_layers=layers,
             batch_first=BATCH_FIRST,
+            proj_size=self.output_dim,
         )
+        #     nn.Linear(self.hidden_dim, output_dim),
+        # )
         self.num_mixtures = num_mixtures
         self.split_sizes = list(np.array([1, 2, 2, 1]) * num_mixtures)
         self.num_layers = layers
@@ -126,8 +130,10 @@ class PredModel(nn.Module):
 
     @torch.no_grad()
     def sse_x(self, target, w, means):
-        w_x = w.argmax(-1)
-        pred = means[..., w_x, :]
+        w_x = w.argmax(-1).repeat(1, 2).view(-1, 1, 2)
+        pred = torch.gather(means, 1, w_x).squeeze(1)
         return nn.functional.mse_loss(
             target[:, 0], pred[:, 0]
-        ) + nn.functional.mse_loss(target[:, 1], pred[:, 1])
+        ) + nn.functional.mse_loss(
+            target[:, 1], pred[:, 1]
+        )  # compute error for each dim separately
