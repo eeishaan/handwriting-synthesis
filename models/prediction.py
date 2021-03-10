@@ -41,6 +41,12 @@ class PredModel(nn.Module):
             self.num_layers, batch_size, self.hidden_dim, requires_grad=True
         )
 
+    def to(self, device):
+        x = super(PredModel, self).to(device)
+        self.h_n = self.h_n.to(device)
+        self.c_n = self.c_n.to(device)
+        return x
+
     def reset(self):
         self.h_n = torch.zeros_like(self.h_n)
         self.c_n = torch.zeros_like(self.c_n)
