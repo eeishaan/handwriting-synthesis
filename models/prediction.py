@@ -35,9 +35,9 @@ class SkipLSTM(nn.Module):
         self.final_projs = nn.ModuleList(
             nn.Linear(hidden_size, output_size, bias=False) for i in range(num_layers)
         )
-        self.next_layer_proj = nn.ModuleList(
-            nn.Linear(hidden_size, hidden_size, bias=False) for i in range(num_layers)
-        )
+        # self.next_layer_proj = nn.ModuleList(
+        #     nn.Linear(hidden_size, hidden_size, bias=False) for i in range(num_layers)
+        # )
         self.input_proj = nn.ModuleList(
             nn.Linear(input_size, hidden_size) for i in range(num_layers)
         )
@@ -51,7 +51,7 @@ class SkipLSTM(nn.Module):
         for i, layer in enumerate(self.layers):
             inp = self.input_proj[i](x)
             if last_inp is not None:
-                inp = inp + self.next_layer_proj[i](last_inp)
+                inp = inp + last_inp
             output, (_h, _c) = (
                 layer(inp)
                 if hs is None
