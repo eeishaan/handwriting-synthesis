@@ -22,7 +22,7 @@ class SkipLSTM(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers):
 
         super(SkipLSTM, self).__init__()
-        size = [input_size] + [hidden_size] * num_layers
+        size = [hidden_size] + [hidden_size] * num_layers
         self.layers = nn.ModuleList(
             nn.LSTM(
                 size[i],
@@ -44,12 +44,14 @@ class SkipLSTM(nn.Module):
         self.bias = torch.nn.Parameter(torch.randn(1))
 
     def forward(self, x, hs=None):
-        inp = x
+        last_inp = None
         running_skip = 0
         h_stack = []  # if hs is None else [hs[0]]
         c_stack = []  # if hs is None else [hs[1]]
         for i, layer in enumerate(self.layers):
-            inp = self.input_proj[i](x) + self.next_layer_proj[i](inp)
+            inp = self.input_proj[i](x)
+            if last_inp is not None:
+                inp = inp + self.next_layer_proj[i](last_inp)
             output, (_h, _c) = (
                 layer(inp)
                 if hs is None
@@ -57,7 +59,7 @@ class SkipLSTM(nn.Module):
             )
             h_stack.append(_h)
             c_stack.append(_c)
-            inp = output
+            last_inp = output
             running_skip = running_skip + self.final_projs[i](output)
         output = running_skip + self.bias
         return output, (torch.cat(h_stack), torch.cat(c_stack))
@@ -128,7 +130,7 @@ class PredModel(nn.Module):
         return y_hat
 
     def _process_output(self, lstm_out):
-        e_t = weird_sig(lstm_out[..., 0])
+        e_t = lstm_out[..., 0]
         mp = lstm_out[..., 1:]
         ws, means, log_std, corr = torch.split(mp, self.split_sizes, dim=-1)
         b, s, _ = means.shape
@@ -178,28 +180,25 @@ class PredModel(nn.Module):
         log_prob = prob + torch.log(torch.pow(t, -1))
         return log_prob
 
-    def infer(self, lstm_out, x, mask):
-        lstm_out = lstm_out[:, :-1, :]  # discard last one
-
+    def infer(self, lstm_out, x, input_mask, label_mask):
         ws, means, covariance_mat, e_t = self._process_output(lstm_out)
 
-        # apply mask
-        seq_len = mask.sum(-1)
-        mask = mask.reshape(-1)
-        means = means.reshape(-1, *means.shape[-2:])[mask]
-        std_1, std_2, rho = covariance_mat
-        std_1 = std_1.reshape(-1, *std_1.shape[-2:])[mask]
-        std_2 = std_2.reshape(-1, *std_2.shape[-2:])[mask]
-        rho = rho.reshape(-1, *rho.shape[-2:])[mask]
+        # (batch, seq, mixs)
 
-        new_ws = ws.reshape(-1, ws.shape[-1])[mask]
-        new_x = x[:, 1:, :].reshape(-1, x.shape[-1])[mask]
+        # apply mask
+        # seq_len = input_mask.sum(-1)
+        means = means[input_mask].reshape(-1, *means.shape[-2:])
+        std_1, std_2, rho = covariance_mat
+        std_1 = std_1[input_mask].reshape(-1, *std_1.shape[-2:])
+        std_2 = std_2[input_mask].reshape(-1, *std_2.shape[-2:])
+        rho = rho[input_mask].reshape(-1, *rho.shape[-2:])
+
+        new_ws = ws[input_mask].reshape(-1, ws.shape[-1])
+        new_x = x[label_mask].reshape(-1, x.shape[-1])
         prob = PredModel.log_prob(new_x, means, std_1, std_2, rho)
         prob = new_ws + prob
         prob = torch.logsumexp(prob, -1)
-        seq_prob = torch.stack(
-            [x.sum() for x in torch.split(prob, seq_len.tolist(), 0)]
-        ).mean()
+        seq_prob = prob.sum() / len(label_mask.sum(0) > 0)
 
         # eval mse for xs
         sse = self.sse_x(new_x.detach(), new_ws.detach(), means.detach())
