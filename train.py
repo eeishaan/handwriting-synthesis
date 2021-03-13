@@ -4,7 +4,7 @@ import pathlib
 import time
 
 import torch
-from torch.nn.functional import binary_cross_entropy
+from torch.nn.functional import binary_cross_entropy_with_logits
 from tqdm import tqdm
 
 from constants import BATCH_FIRST
@@ -30,21 +30,25 @@ def train():
     os.makedirs(save_dir)
     bptt_steps = 100
 
-    def _single_epoch(x, labels, mask):
+    def _single_epoch(x, labels, label_mask, input_mask):
         x = x.to(device)
-        labels = labels[:, 1:].to(device)  # shift the target to x_t+1
-        mask = mask.to(device)
+        labels = labels.to(device)
+        label_mask = label_mask.to(device)
+        input_mask = input_mask.to(device)
+
         out = model(x)
         out.retain_grad()
 
         # with torch.autograd.detect_anomaly():
-        prob_t, e_t, sse = model.infer(out, x, mask)  # shape = (b,s)
+        prob_t, e_t, sse = model.infer(out, x, input_mask, label_mask)  # shape = (b,s)
 
         # calculate loss
         prob_loss = -prob_t
         e_t_loss = (
-            binary_cross_entropy(input=e_t, target=labels, reduction="none") * mask
-        ).sum() / len(mask.sum(0) > 1)
+            binary_cross_entropy_with_logits(
+                input=e_t[input_mask], target=labels[label_mask], reduction="none"
+            )
+        ).sum() / len(label_mask.sum(0) > 1)
 
         loss = prob_loss + e_t_loss
 
@@ -66,7 +70,7 @@ def train():
         p_loss = 0
         epoch_sse = 0
 
-        for x, labels, mask, all_lens in loader:
+        for x, labels, label_mask, input_mask in loader:
 
             #     xs = torch.split(all_x, bptt_steps, 1)
             #     ls = torch.split(all_labels, bptt_steps, 1)
@@ -74,7 +78,7 @@ def train():
             #     batch_loss = 0
             # for i, (x, labels, mask) in enumerate(zip(xs, ls, ms)):
 
-            prob_loss, e_t_loss, sse = _single_epoch(x, labels, mask)
+            prob_loss, e_t_loss, sse = _single_epoch(x, labels, label_mask, input_mask)
             e_loss += e_t_loss
             p_loss += prob_loss
             epoch_sse += sse
