@@ -138,8 +138,8 @@ class PredModel(nn.Module):
         means = means.view(b, s, self.num_mixtures, 2)
         std = log_std.exp().view(b, s, self.num_mixtures, 2)
         corr = corr.tanh().view(b, s, self.num_mixtures, 1)
-        std_1 = std[..., -2:-1] ** 2
-        std_2 = std[..., -1:] ** 2
+        std_1 = std[..., -2:-1]
+        std_2 = std[..., -1:]
         covariance_mat = (std_1, std_2, corr)
         return ws, means, covariance_mat, e_t
 
@@ -153,11 +153,16 @@ class PredModel(nn.Module):
         out = []
         for i in range(700):
             y_hat, (h_n, c_n) = self.lstm(inp, (h_n, c_n))
-            ws, means, covariance_mat, e_t = self._process_output(y_hat)
+            ws, means, (std_1, std_2, corr), e_t = self._process_output(y_hat)
 
             ws = ws.squeeze().exp()
             j = ws.argmax()
             x_nt = means[..., j, :]
+            # covariance_mat = torch.cat(
+            #     [std_1, std_1 * std_2 * corr, std_1 * std_2 * corr, std_2], axis=-1
+            # ).view(b, s, self.num_mixtures, 2, 2)
+            # dist = MultivariateNormal(x_nt, covariance_matrix=covariance_mat)
+            # x_nt = dist.sample()
             inp = x_nt
             x_nt = x_nt.squeeze(0)
             e_t[e_t > 0.5] = 1
