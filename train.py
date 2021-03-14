@@ -4,7 +4,7 @@ import pathlib
 import time
 
 import torch
-from torch.nn.functional import binary_cross_entropy_with_logits
+from torch.nn.functional import binary_cross_entropy, binary_cross_entropy_with_logits
 from tqdm import tqdm
 
 from constants import BATCH_FIRST
@@ -12,43 +12,47 @@ from data import get_loader
 from models.prediction import PredModel
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+root = "/tmp/" if torch.cuda.is_available() else ""
 from torch.nn.utils import clip_grad_norm_
 
 
 def train():
     batch_size = 64
     lr = 1e-4
-    model = PredModel(2, 3, 20, batch_size=batch_size, hidden_dim=400).to(device)
-    optim = torch.optim.Adam(model.parameters(), lr=lr)
+    model = PredModel(2, 1, 20, batch_size=batch_size, hidden_dim=900).to(device)
+    optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     # optim = torch.optim.RMSprop(
     #     model.parameters(), lr=lr, alpha=0.9, momentum=0.95, eps=1e-4
     # )
-    loader, dataset = get_loader("/tmp/data/strokes-py3.npy", batch_size)
+    loader, dataset = get_loader(root + "data/strokes-py3.npy", batch_size)
     # loader, dataset = get_loader("data/strokes-py3.npy", batch_size)
-    num_epochs = 200
-    save_dir = pathlib.Path(f"runs/{batch_size}_{lr}_{time.time()}")
+    num_epochs = 100
+    save_dir = pathlib.Path(f"{root}runs/{batch_size}_{lr}_{time.time()}")
     os.makedirs(save_dir)
     bptt_steps = 100
+    # model.generate(device)
 
-    def _single_epoch(x, labels, label_mask, input_mask):
+    def _single_step(x, labels, label_mask, input_mask):
         x = x.to(device)
-        labels = labels.to(device)
-        label_mask = label_mask.to(device)
-        input_mask = input_mask.to(device)
+        labels = labels[:, 1:].to(device)
+        label_mask = label_mask[:, 1:].to(device)
+        input_mask = input_mask[:, :-1].to(device)
 
-        out = model(x)
+        out = model(x[:, :-1, :])
         out.retain_grad()
 
         # with torch.autograd.detect_anomaly():
-        prob_t, e_t, sse = model.infer(out, x, input_mask, label_mask)  # shape = (b,s)
+        prob_t, e_t, sse = model.infer(
+            out, x[:, 1:, :], input_mask, label_mask
+        )  # shape = (b,s)
 
         # calculate loss
         prob_loss = -prob_t
         e_t_loss = (
-            binary_cross_entropy_with_logits(
+            binary_cross_entropy(
                 input=e_t[input_mask], target=labels[label_mask], reduction="none"
             )
-        ).sum() / len(label_mask.sum(0) > 1)
+        ).sum() / len(label_mask.sum(1) > 1)
 
         loss = prob_loss + e_t_loss
 
@@ -70,20 +74,25 @@ def train():
         p_loss = 0
         epoch_sse = 0
 
-        for x, labels, label_mask, input_mask in loader:
+        for all_x, all_labels, all_label_mask, all_input_mask in loader:
 
-            #     xs = torch.split(all_x, bptt_steps, 1)
-            #     ls = torch.split(all_labels, bptt_steps, 1)
-            #     ms = torch.split(all_mask, bptt_steps, 1)
-            #     batch_loss = 0
-            # for i, (x, labels, mask) in enumerate(zip(xs, ls, ms)):
+            xs = torch.split(all_x, bptt_steps, 1)
+            ls = torch.split(all_labels, bptt_steps, 1)
+            i_ms = torch.split(all_input_mask, bptt_steps, 1)
+            l_ms = torch.split(all_label_mask, bptt_steps, 1)
+            model.reset()
+            for i, (x, labels, input_mask, label_mask) in enumerate(
+                zip(xs, ls, i_ms, l_ms)
+            ):
+                # for x, labels, label_mask, input_mask in loader:
+                prob_loss, e_t_loss, sse = _single_step(
+                    x, labels, label_mask, input_mask
+                )
+                e_loss += e_t_loss
+                p_loss += prob_loss
+                epoch_sse += sse
 
-            prob_loss, e_t_loss, sse = _single_epoch(x, labels, label_mask, input_mask)
-            e_loss += e_t_loss
-            p_loss += prob_loss
-            epoch_sse += sse
-
-        len_batches = len(loader) + 1
+        len_batches = len(loader) * len(xs)
         e_loss /= len_batches
         p_loss /= len_batches
         epoch_loss = e_loss + p_loss

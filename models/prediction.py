@@ -1,5 +1,6 @@
 from math import log
 import sys
+from numpy.lib.arraysetops import isin
 
 sys.path.append("..")
 import torch
@@ -55,7 +56,7 @@ class SkipLSTM(nn.Module):
             output, (_h, _c) = (
                 layer(inp)
                 if hs is None
-                else layer(inp, (hs[0][i : i + 1], hs[1][i : i + 1]))
+                else layer(inp, (hs[0][i : i + 1].detach(), hs[1][i : i + 1].detach()))
             )
             h_stack.append(_h)
             c_stack.append(_c)
@@ -95,57 +96,32 @@ class PredModel(nn.Module):
         )
         self.batch_size = batch_size
 
-    # def to(self, device):
-    #     x = super(PredModel, self).to(device)
-    #     self.h_n = self.h_n.to(device)
-    #     self.c_n = self.c_n.to(device)
-    #     return x
+        self.hidden = None
 
-    # @torch.no_grad()
-    # def reset(self):
-    #     # return
-    #     device = self.h_n.device
-    #     del self.h_n, self.c_n
-    #     self.h_n = torch.zeros(
-    #         self.num_layers,
-    #         self.batch_size,
-    #         self.output_dim,
-    #         requires_grad=True,
-    #         device=device,
-    #     )
-    #     self.c_n = torch.zeros(
-    #         self.num_layers,
-    #         self.batch_size,
-    #         self.hidden_dim,
-    #         requires_grad=True,
-    #         device=device,
-    #     )
+    def reset(self):
+        self.hidden = None
 
     def forward(self, x):
-        # x is of shape (batch, seq, x)
-        # y_hat, (self.h_n, self.c_n) = self.lstm(
-        #     x, (self.h_n.detach(), self.c_n.detach())
-        # )
-        y_hat, _ = self.lstm(x)
+        y_hat, self.hidden = self.lstm(x, self.hidden)
         return y_hat
 
     def _process_output(self, lstm_out):
-        e_t = lstm_out[..., 0]
+        e_t = weird_sig(lstm_out[..., 0])
         mp = lstm_out[..., 1:]
         ws, means, log_std, corr = torch.split(mp, self.split_sizes, dim=-1)
         b, s, _ = means.shape
         ws = nn.LogSoftmax(-1)(ws).view(b, s, self.num_mixtures)
         means = means.view(b, s, self.num_mixtures, 2)
         std = log_std.exp().view(b, s, self.num_mixtures, 2)
-        corr = corr.tanh().view(b, s, self.num_mixtures, 1)
-        std_1 = std[..., -2:-1]
-        std_2 = std[..., -1:]
+        corr = corr.tanh().view(b, s, self.num_mixtures)
+        std_1 = std[..., -2]
+        std_2 = std[..., -1]
         covariance_mat = (std_1, std_2, corr)
         return ws, means, covariance_mat, e_t
 
     @torch.no_grad()
     def generate(self, device):
-        inp = torch.randn(2, device=device).unsqueeze(0).unsqueeze(0)
+        inp = torch.rand(2, device=device).unsqueeze(0).unsqueeze(0)
         h_n, c_n = (
             torch.zeros(self.num_layers, 1, self.hidden_dim, device=device),
             torch.zeros(self.num_layers, 1, self.hidden_dim, device=device),
@@ -158,15 +134,20 @@ class PredModel(nn.Module):
             ws = ws.squeeze().exp()
             j = ws.argmax()
             x_nt = means[..., j, :]
+            # std_1 = std_1[..., j] ** 2
+            # std_2 = std_2[..., j] ** 2
+            # corr = corr[..., j] ** 2
             # covariance_mat = torch.cat(
             #     [std_1, std_1 * std_2 * corr, std_1 * std_2 * corr, std_2], axis=-1
-            # ).view(b, s, self.num_mixtures, 2, 2)
-            # dist = MultivariateNormal(x_nt, covariance_matrix=covariance_mat)
-            # x_nt = dist.sample()
+            # ).view(1, 2, 2)
+            # dist = MultivariateNormal(x_nt.squeeze(0), covariance_matrix=covariance_mat)
+            # x_nt = dist.sample().unsqueeze(0)
             inp = x_nt
             x_nt = x_nt.squeeze(0)
-            e_t[e_t > 0.5] = 1
-            e_t[e_t <= 0.5] = 0
+            u = torch.rand(1)[0]
+            e_t[e_t <= u] = 1
+            e_t[e_t > u] = 0
+
             out.append(torch.cat([e_t, x_nt], axis=1))
         return out
 
@@ -174,15 +155,12 @@ class PredModel(nn.Module):
     def log_prob(points, means, std_1, std_2, rho):
         eps = 1e-7
         points = points.unsqueeze(1)
-        std_1 = std_1.squeeze(-1)
-        std_2 = std_2.squeeze(-1)
-        rho = rho.squeeze(-1)
         t1 = (points[..., 0] - means[..., 0]) / (std_1 + eps)
         t2 = (points[..., 1] - means[..., 1]) / (std_2 + eps)
         z = t1 ** 2 + t2 ** 2 - 2 * rho * t1 * t2
         prob = -z / (2 * (1 - rho ** 2) + eps)
         t = 2 * 3.1415927410125732 * std_1 * std_2 * torch.sqrt(1 - rho ** 2) + eps
-        log_prob = prob + torch.log(torch.pow(t, -1))
+        log_prob = prob - torch.log(t)
         return log_prob
 
     def infer(self, lstm_out, x, input_mask, label_mask):
@@ -191,21 +169,20 @@ class PredModel(nn.Module):
         # (batch, seq, mixs)
 
         # apply mask
-        # seq_len = input_mask.sum(-1)
         means = means[input_mask].reshape(-1, *means.shape[-2:])
         std_1, std_2, rho = covariance_mat
-        std_1 = std_1[input_mask].reshape(-1, *std_1.shape[-2:])
-        std_2 = std_2[input_mask].reshape(-1, *std_2.shape[-2:])
-        rho = rho[input_mask].reshape(-1, *rho.shape[-2:])
+        std_1 = std_1[input_mask]
+        std_2 = std_2[input_mask]
+        rho = rho[input_mask]
 
-        new_ws = ws[input_mask].reshape(-1, ws.shape[-1])
-        new_x = x[label_mask].reshape(-1, x.shape[-1])
+        new_ws = ws[input_mask]
+        new_x = x[label_mask]
         prob = PredModel.log_prob(new_x, means, std_1, std_2, rho)
         prob = new_ws + prob
         prob = torch.logsumexp(prob, -1)
-        seq_prob = prob.sum() / len(label_mask.sum(0) > 0)
+        seq_prob = prob.sum() / len(label_mask.sum(1) > 0)
 
-        # eval mse for xs
+        # eval sse for xs
         sse = self.sse_x(new_x.detach(), new_ws.detach(), means.detach())
         return seq_prob, e_t, sse
 
