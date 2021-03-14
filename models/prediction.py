@@ -1,6 +1,4 @@
-from math import log
 import sys
-from numpy.lib.arraysetops import isin
 
 sys.path.append("..")
 import torch
@@ -120,8 +118,10 @@ class PredModel(nn.Module):
         return ws, means, covariance_mat, e_t
 
     @torch.no_grad()
-    def generate(self, device):
-        inp = torch.rand(2, device=device).unsqueeze(0).unsqueeze(0)
+    def generate(self, seed, device):
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        inp = torch.zeros(3, device=device).unsqueeze(0).unsqueeze(0)
         h_n, c_n = (
             torch.zeros(self.num_layers, 1, self.hidden_dim, device=device),
             torch.zeros(self.num_layers, 1, self.hidden_dim, device=device),
@@ -144,13 +144,12 @@ class PredModel(nn.Module):
             # ).view(1, 2, 2)
             # dist = MultivariateNormal(x_nt.squeeze(0), covariance_matrix=covariance_mat)
             # x_nt = dist.sample().unsqueeze(0)
-            inp = x_nt
-            x_nt = x_nt.squeeze(0)
             u = torch.rand(1)[0]
-            # print(e_t)
             e_t[e_t <= u] = 0
             e_t[e_t > u] = 1
-            out.append(torch.cat([e_t, x_nt], axis=1))
+            inp = torch.cat([e_t.unsqueeze(0), x_nt], axis=-1)
+
+            out.append(inp)
         return out
 
     @staticmethod
