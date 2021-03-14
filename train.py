@@ -19,7 +19,7 @@ from torch.nn.utils import clip_grad_norm_
 def train():
     batch_size = 64
     lr = 1e-4
-    model = PredModel(2, 1, 20, batch_size=batch_size, hidden_dim=900).to(device)
+    model = PredModel(3, 3, 20, batch_size=batch_size, hidden_dim=400).to(device)
     optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     # optim = torch.optim.RMSprop(
     #     model.parameters(), lr=lr, alpha=0.9, momentum=0.95, eps=1e-4
@@ -43,7 +43,7 @@ def train():
 
         # with torch.autograd.detect_anomaly():
         prob_t, e_t, sse = model.infer(
-            out, x[:, 1:, :], input_mask, label_mask
+            out, x[:, 1:, 1:], input_mask, label_mask
         )  # shape = (b,s)
 
         # calculate loss

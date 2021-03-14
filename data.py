@@ -57,7 +57,7 @@ def collate_sequence(batch):
 
     # spearate out the labels
     labels = padded[:, :, 0]
-    coordinates = padded[:, :, 1:]
+    coordinates = padded[:, :, :]
     # make label mask
 
     # remove one for training, as we can't predict for the last label
