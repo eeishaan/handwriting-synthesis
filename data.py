@@ -13,7 +13,7 @@ class StrokeDataset(Dataset):
         self.data = np.load(file, allow_pickle=True)
 
         data = list(self.data)
-        data.sort(key=lambda x: x.shape[0])
+        data.sort(key=lambda x: x.shape[0], reverse=True)
 
         if is_norm:
             self.norm = StandardScaler()
@@ -23,7 +23,7 @@ class StrokeDataset(Dataset):
             for i, d in enumerate(data):
                 t = self.norm.transform(d[:, 1:])
                 t = np.concatenate([d[:, :1], t], axis=1)
-                data[i] = d
+                data[i] = t
 
         self.data = data
 
@@ -40,7 +40,7 @@ class StrokeDataset(Dataset):
 def collate_sequence(batch):
 
     # data = list(self.data)
-    batch.sort(key=lambda x: x.shape[0])
+    batch.sort(key=lambda x: x.shape[0], reverse=True)
 
     lens = list(map(len, batch))
 
