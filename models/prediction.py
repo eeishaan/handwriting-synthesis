@@ -39,9 +39,8 @@ class SkipLSTM(nn.Module):
         # self.next_layer_proj = nn.ModuleList(
         #     nn.Linear(hidden_size, hidden_size, bias=False) for i in range(num_layers)
         # )
-        self.input_proj = nn.ModuleList(
-            nn.Linear(input_size, hidden_size) for i in range(num_layers)
-        )
+        # self.input_proj = nn.ModuleList(
+        self.input_proj = nn.Linear(input_size, hidden_size)
         self.bias = torch.nn.Parameter(torch.randn(1))
 
     def forward(self, x, hs=None):
@@ -49,8 +48,10 @@ class SkipLSTM(nn.Module):
         running_skip = 0
         h_stack = []  # if hs is None else [hs[0]]
         c_stack = []  # if hs is None else [hs[1]]
+        x = self.input_proj(x)
         for i, layer in enumerate(self.layers):
-            inp = self.input_proj[i](x)
+            # inp = self.input_proj[i](x)
+            inp = x
             if last_inp is not None:
                 inp = inp + last_inp
             output, (_h, _c) = (
