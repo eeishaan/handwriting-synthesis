@@ -14,9 +14,8 @@ import numpy as np
 
 @torch.jit.script
 def weird_sig(x):
-    x = 1 + x.exp()
-    x = x.pow(-1)
-    return x
+    ans = torch.where(x >= 0, (-x).exp() / (1 + (-x).exp()), 1 / (1 + x.exp()))
+    return ans
 
 
 class SkipLSTM(nn.Module):
