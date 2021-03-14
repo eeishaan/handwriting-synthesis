@@ -26,12 +26,20 @@ class StrokeDataset(Dataset):
                 data[i] = t
 
         self.data = data
+        self.chunk_len = 700
 
     def __len__(self) -> int:
         return len(self.data)
 
     def __getitem__(self, index: int):
         new_data = self.data[index]
+
+        max_len = max(new_data.shape[0] - self.chunk_len, 0)
+        start = 0
+        if max_len > 0:
+            start = np.random.randint(max_len)
+        end = start + self.chunk_len
+        new_data = new_data[start:end, :]
         # new_data = np.pad(new_data, ((1, 0), (0, 0)))
 
         return torch.from_numpy(new_data)

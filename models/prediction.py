@@ -133,7 +133,9 @@ class PredModel(nn.Module):
             ws, means, (std_1, std_2, corr), e_t = self._process_output(y_hat)
 
             ws = ws.squeeze().exp()
-            j = ws.argmax()
+            # print(ws)
+            j = torch.multinomial(ws, 1)[0]
+            # j = ws.argmax()
             x_nt = means[..., j, :]
             # std_1 = std_1[..., j] ** 2
             # std_2 = std_2[..., j] ** 2
@@ -146,9 +148,9 @@ class PredModel(nn.Module):
             inp = x_nt
             x_nt = x_nt.squeeze(0)
             u = torch.rand(1)[0]
-            e_t[e_t <= u] = 1
-            e_t[e_t > u] = 0
-
+            # print(e_t)
+            e_t[e_t <= u] = 0
+            e_t[e_t > u] = 1
             out.append(torch.cat([e_t, x_nt], axis=1))
         return out
 
