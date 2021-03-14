@@ -19,8 +19,8 @@ from torch.nn.utils import clip_grad_norm_
 def train():
     batch_size = 64
     lr = 1e-4
-    model = PredModel(2, 1, 20, batch_size=batch_size, hidden_dim=900).to(device)
-    optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    model = PredModel(2, 3, 20, batch_size=batch_size, hidden_dim=400).to(device)
+    optim = torch.optim.AdamW(model.parameters(), lr=lr)
     # optim = torch.optim.RMSprop(
     #     model.parameters(), lr=lr, alpha=0.9, momentum=0.95, eps=1e-4
     # )
@@ -34,17 +34,15 @@ def train():
 
     def _single_step(x, labels, label_mask, input_mask):
         x = x.to(device)
-        labels = labels[:, 1:].to(device)
-        label_mask = label_mask[:, 1:].to(device)
-        input_mask = input_mask[:, :-1].to(device)
+        labels = labels.to(device)
+        label_mask = label_mask.to(device)
+        input_mask = input_mask.to(device)
 
-        out = model(x[:, :-1, :])
+        out = model(x)
         out.retain_grad()
 
         # with torch.autograd.detect_anomaly():
-        prob_t, e_t, sse = model.infer(
-            out, x[:, 1:, :], input_mask, label_mask
-        )  # shape = (b,s)
+        prob_t, e_t, sse = model.infer(out, x, input_mask, label_mask)  # shape = (b,s)
 
         # calculate loss
         prob_loss = -prob_t
@@ -74,25 +72,23 @@ def train():
         p_loss = 0
         epoch_sse = 0
 
-        for all_x, all_labels, all_label_mask, all_input_mask in loader:
+        # for all_x, all_labels, all_label_mask, all_input_mask in loader:
 
-            xs = torch.split(all_x, bptt_steps, 1)
-            ls = torch.split(all_labels, bptt_steps, 1)
-            i_ms = torch.split(all_input_mask, bptt_steps, 1)
-            l_ms = torch.split(all_label_mask, bptt_steps, 1)
-            model.reset()
-            for i, (x, labels, input_mask, label_mask) in enumerate(
-                zip(xs, ls, i_ms, l_ms)
-            ):
-                # for x, labels, label_mask, input_mask in loader:
-                prob_loss, e_t_loss, sse = _single_step(
-                    x, labels, label_mask, input_mask
-                )
-                e_loss += e_t_loss
-                p_loss += prob_loss
-                epoch_sse += sse
-
-        len_batches = len(loader) * len(xs)
+        #     xs = torch.split(all_x, bptt_steps, 1)
+        #     ls = torch.split(all_labels, bptt_steps, 1)
+        #     i_ms = torch.split(all_input_mask, bptt_steps, 1)
+        #     l_ms = torch.split(all_label_mask, bptt_steps, 1)
+        #     model.reset()
+        #     for i, (x, labels, input_mask, label_mask) in enumerate(
+        #         zip(xs, ls, i_ms, l_ms)
+        #     ):
+        for x, labels, label_mask, input_mask in loader:
+            prob_loss, e_t_loss, sse = _single_step(x, labels, label_mask, input_mask)
+            e_loss += e_t_loss
+            p_loss += prob_loss
+            epoch_sse += sse
+        model.reset()
+        len_batches = len(loader)  # * len(xs)
         e_loss /= len_batches
         p_loss /= len_batches
         epoch_loss = e_loss + p_loss

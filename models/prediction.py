@@ -8,7 +8,7 @@ import torch.nn as nn
 from constants import BATCH_FIRST
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
-from torch.nn.utils.rnn import pad_packed_sequence, PackedSequence
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, PackedSequence
 import numpy as np
 
 
@@ -79,12 +79,20 @@ class PredModel(nn.Module):
         self.hidden_dim = hidden_dim
         output_dim = 1 + 6 * num_mixtures
         self.output_dim = output_dim
-        self.lstm = SkipLSTM(
+        self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=self.hidden_dim,
-            output_size=output_dim,
+            proj_size=self.output_dim,
             num_layers=layers,
+            batch_first=BATCH_FIRST,
         )
+
+        # SkipLSTM(
+        #     input_size=input_size,
+        #     hidden_size=self.hidden_dim,
+        #     output_size=output_dim,
+        #     num_layers=layers,
+        # )
         self.num_mixtures = num_mixtures
         self.split_sizes = list(np.array([1, 2, 2, 1]) * num_mixtures)
         self.num_layers = layers
@@ -96,13 +104,40 @@ class PredModel(nn.Module):
         )
         self.batch_size = batch_size
 
-        self.hidden = None
+        self.reset()
+        self.init_parameters("orthogonal")
+
+    def init_parameters(self, init_type, gain=1):
+        """Initialize model parameters
+        Args:
+            init_type (str, optional): type of initialization of weights; ["xavier","orthogonal"].
+            gain (int, optional): optional scaling factor. Defaults to 1.
+        """
+        for param in self.parameters():
+            if isinstance(param, nn.Linear):
+                nn.init.xavier_uniform_(param.weight)
+                param.bias.data.fill_(0.01)
+            elif param.dim() == 1:
+                nn.init.constant_(param, 0.0)
+            elif param.dim() > 1:
+                if init_type == "xavier":
+                    nn.init.xavier_uniform_(param, gain=gain)
+                elif init_type == "orthogonal":
+                    nn.init.orthogonal_(param, gain=gain)
 
     def reset(self):
-        self.hidden = None
+        self.hidden = (
+            torch.zeros(
+                self.num_layers, self.batch_size, self.output_dim, requires_grad=True
+            ),
+            torch.zeros(
+                self.num_layers, self.batch_size, self.hidden_dim, requires_grad=True
+            ),
+        )
 
     def forward(self, x):
-        y_hat, self.hidden = self.lstm(x, self.hidden)
+        y_hat, _ = self.lstm(x)
+        y_hat, _ = pad_packed_sequence(y_hat, batch_first=BATCH_FIRST)
         return y_hat
 
     def _process_output(self, lstm_out):
@@ -134,14 +169,6 @@ class PredModel(nn.Module):
             ws = ws.squeeze().exp()
             j = ws.argmax()
             x_nt = means[..., j, :]
-            # std_1 = std_1[..., j] ** 2
-            # std_2 = std_2[..., j] ** 2
-            # corr = corr[..., j] ** 2
-            # covariance_mat = torch.cat(
-            #     [std_1, std_1 * std_2 * corr, std_1 * std_2 * corr, std_2], axis=-1
-            # ).view(1, 2, 2)
-            # dist = MultivariateNormal(x_nt.squeeze(0), covariance_matrix=covariance_mat)
-            # x_nt = dist.sample().unsqueeze(0)
             inp = x_nt
             x_nt = x_nt.squeeze(0)
             u = torch.rand(1)[0]
@@ -165,6 +192,7 @@ class PredModel(nn.Module):
 
     def infer(self, lstm_out, x, input_mask, label_mask):
         ws, means, covariance_mat, e_t = self._process_output(lstm_out)
+        x, _ = pad_packed_sequence(x, batch_first=BATCH_FIRST)
 
         # (batch, seq, mixs)
 
