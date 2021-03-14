@@ -2,7 +2,7 @@ import enum
 import os
 import pathlib
 import time
-
+import shutil
 import torch
 from torch.nn.functional import binary_cross_entropy, binary_cross_entropy_with_logits
 from tqdm import tqdm
@@ -27,7 +27,7 @@ def train():
     loader, dataset = get_loader(root + "data/strokes-py3.npy", batch_size)
     # loader, dataset = get_loader("data/strokes-py3.npy", batch_size)
     num_epochs = 100
-    save_dir = pathlib.Path(f"{root}runs/{batch_size}_{lr}_{time.time()}")
+    save_dir = f"{root}runs/{batch_size}_{lr}_{time.time()}"
     os.makedirs(save_dir)
     bptt_steps = 100
     # model.generate(device)
@@ -102,8 +102,10 @@ def train():
         # checkpoint weights
         torch.save(
             {"model": model.state_dict(), "optim": optim.state_dict(), "epoch": epoch},
-            open(save_dir / "model.pt", "wb"),
+            open(save_dir + "/model.pt", "wb"),
         )
+
+    shutil.move(save_dir, save_dir[len(root) :])
 
 
 if __name__ == "__main__":
