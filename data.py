@@ -1,20 +1,24 @@
+import os
+import string
+
 import numpy as np
 import torch
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
-from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
+from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence
+from torch.utils.data import DataLoader, Dataset
 
 from constants import BATCH_FIRST
 
 
 class StrokeDataset(Dataset):
-    def __init__(self, file, is_norm=True):
+    def __init__(self, file, is_norm=True, with_texts=False):
         global largest_sequence
         self.data = np.load(file, allow_pickle=True)
 
         data = list(self.data)
         data.sort(key=lambda x: x.shape[0], reverse=True)
 
+        self.with_texts = with_texts
         if is_norm:
             self.norm = StandardScaler()
             x = [s[:, 1:] for s in self.data]
@@ -24,9 +28,25 @@ class StrokeDataset(Dataset):
                 t = self.norm.transform(d[:, 1:])
                 t = np.concatenate([d[:, :1], t], axis=1)
                 data[i] = t
+        if with_texts:
+            s_file = os.path.join(os.path.dirname(file), "sentences.txt")
+            with open(s_file) as fob:
+                texts = fob.readlines()
+            l_map = {c: label for label, c in enumerate(string.ascii_letters)}
+
+            def get_label(x):
+                return l_map.get(x, 56)
+
+            one_hot = []
+            for i, l in enumerate(texts):
+                labels = list(map(get_label, l))
+                hot = np.zeros((len(labels), 57))
+                hot[np.arange(len(labels)), labels] = 1
+                one_hot.append(hot)
+            self.texts = one_hot
 
         self.data = data
-        self.chunk_len = 700
+        self.chunk_len = 700 if not self.with_texts else None
 
     def __len__(self) -> int:
         return len(self.data)
@@ -34,21 +54,40 @@ class StrokeDataset(Dataset):
     def __getitem__(self, index: int):
         new_data = self.data[index]
 
-        max_len = max(new_data.shape[0] - self.chunk_len, 0)
-        start = 0
-        if max_len > 0:
-            start = np.random.randint(max_len)
-        end = start + self.chunk_len
-        new_data = new_data[start:end, :]
+        if self.chunk_len:
+            max_len = max(new_data.shape[0] - self.chunk_len, 0)
+            start = 0
+            if max_len > 0:
+                start = np.random.randint(max_len)
+            end = start + self.chunk_len
+            new_data = new_data[start:end, :]
         # new_data = np.pad(new_data, ((1, 0), (0, 0)))
+        res = torch.from_numpy(new_data)
+        if self.with_texts:
+            res = (res, torch.from_numpy(self.texts[index]))
+        return res
 
-        return torch.from_numpy(new_data)
 
-
-def collate_sequence(batch):
+def collate_sequence(inp):
 
     # data = list(self.data)
-    batch.sort(key=lambda x: x.shape[0], reverse=True)
+    with_chars = isinstance(inp[0], tuple)
+
+    if with_chars:
+
+        def _cmp(x):
+            return x[0].shape[0]
+
+        inp.sort(key=_cmp, reverse=True)
+        batch = [b[0] for b in inp]
+        chars = [b[1] for b in inp]
+    else:
+
+        def _cmp(x):
+            return x.shape[0]
+
+        inp.sort(key=_cmp, reverse=True)
+        batch = inp
 
     lens = list(map(len, batch))
 
@@ -74,11 +113,19 @@ def collate_sequence(batch):
     ).unsqueeze(1)
 
     # dispatch
-    return coordinates, labels, label_mask, input_mask
+    res = (
+        coordinates,
+        labels,
+        label_mask,
+        input_mask,
+    )
+    if with_chars:
+        res += (chars,)
+    return res
 
 
-def get_loader(file, batch_size):
-    dataset = StrokeDataset(file)
+def get_loader(file, batch_size, with_texts=False):
+    dataset = StrokeDataset(file, with_texts=with_texts)
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
