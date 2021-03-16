@@ -17,9 +17,19 @@ def weird_sig(x):
 
 
 class SkipLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, num_layers):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        output_size,
+        num_layers,
+        with_texts=False,
+        win_size=None,
+    ):
 
         super(SkipLSTM, self).__init__()
+        self.with_texts = with_texts
+        self.win_size = win_size
         size = [hidden_size] + [hidden_size] * num_layers
         self.layers = nn.ModuleList(
             nn.LSTM(
@@ -40,22 +50,75 @@ class SkipLSTM(nn.Module):
         self.input_proj = nn.Linear(input_size, hidden_size)
         self.bias = torch.nn.Parameter(torch.randn(1))
 
-    def forward(self, x, hs=None):
+        if self.with_texts:
+            self.c_size = 1
+            self.window_proj = nn.Linear(hidden_size, win_size * self.c_size * 3)
+            self.win_splits = list(
+                np.array([self.c_size, self.c_size, self.c_size]) * win_size
+            )
+            self.win_hidden_proj = nn.Linear(57, hidden_size, bias=False)
+
+    def compute_wt(self, seqs, h):
+        # seqs: shape(b, s_u, 57)
+        def _phi_u(u, alpha, beta, keta):
+            # u : (s_u)
+            # alpha: (b, s, 10, 1)
+            # u = u.unsqueeze(1)
+            ans = alpha - beta * (keta - u) ** 2
+            ans = ans.sum(-2)
+            return ans
+
+        proj = self.window_proj(h)
+        b, s, _ = proj.shape
+        # b, s, mixtures
+        alpha, beta, keta = torch.split(proj, self.win_splits, dim=-1)
+        alpha = alpha.view(b, s, self.win_size, -1)
+        beta = beta.exp().view(b, s, self.win_size, -1)
+        keta = keta.exp().view(b, s, self.win_size, -1).cumsum(1)
+
+        u_len = seqs.shape[1]
+        phi_u = _phi_u(torch.arange(u_len, device=alpha.device), alpha, beta, keta)
+        # shape = b, s, s_u
+        w_t = phi_u.unsqueeze(-1) * seqs.unsqueeze(1)
+        w_t = w_t.sum(2)
+        return w_t  # shape b, s, 57
+
+    def forward(self, x, hs=None, seqs=None):
         last_inp = None
         running_skip = 0
         h_stack = []  # if hs is None else [hs[0]]
         c_stack = []  # if hs is None else [hs[1]]
         x = self.input_proj(x)
+
+        def _lstm_step(layer, hs, inp):
+            return layer(inp) if hs is None else layer(inp, (hs[0], hs[1]))
+
         for i, layer in enumerate(self.layers):
-            # inp = self.input_proj[i](x)
+            _hs = (hs[0][i : i + 1].detach(), hs[1][i : i + 1].detach()) if hs else None
+            if i == 0 and self.with_texts:
+                # send only 1 time step
+                _, s, _ = x.shape
+                last_w = 0
+                h_final = torch.zeros_like(x)
+                w_t = torch.zeros_like(x)
+                for start in range(s):
+                    inp = last_w + x[:, start : start + 1, :]
+                    h_1, _hs = _lstm_step(layer, _hs, inp)
+                    w_1 = self.compute_wt(seqs, h_1)
+                    last_w = self.win_hidden_proj(w_1)
+                    h_final[:, start : start + 1, :] = h_1
+                    w_t[:, start : start + 1, :] = last_w
+                last_inp = h_final
+                running_skip = running_skip + self.final_projs[i](last_inp)
+                h_stack.append(_hs[0])
+                c_stack.append(_hs[1])
+                continue
             inp = x
             if last_inp is not None:
                 inp = inp + last_inp
-            output, (_h, _c) = (
-                layer(inp)
-                if hs is None
-                else layer(inp, (hs[0][i : i + 1].detach(), hs[1][i : i + 1].detach()))
-            )
+                if self.with_texts:
+                    inp = inp + w_t
+            output, (_h, _c) = _lstm_step(layer, _hs, inp)
             h_stack.append(_h)
             c_stack.append(_c)
             last_inp = output
@@ -66,22 +129,20 @@ class SkipLSTM(nn.Module):
 
 class PredModel(nn.Module):
     def __init__(
-        self,
-        input_size,
-        layers,
-        num_mixtures,
-        batch_size,
-        hidden_dim,
+        self, input_size, layers, num_mixtures, batch_size, hidden_dim, with_texts=False
     ):
         super(PredModel, self).__init__()
         self.hidden_dim = hidden_dim
         output_dim = 1 + 6 * num_mixtures
         self.output_dim = output_dim
+        self.win_size = 10
         self.lstm = SkipLSTM(
             input_size=input_size,
             hidden_size=self.hidden_dim,
             output_size=output_dim,
             num_layers=layers,
+            with_texts=with_texts,
+            win_size=self.win_size,
         )
         self.num_mixtures = num_mixtures
         self.split_sizes = list(np.array([1, 2, 2, 1]) * num_mixtures)
@@ -99,8 +160,8 @@ class PredModel(nn.Module):
     def reset(self):
         self.hidden = None
 
-    def forward(self, x):
-        y_hat, self.hidden = self.lstm(x, self.hidden)
+    def forward(self, x, seqs=None):
+        y_hat, self.hidden = self.lstm(x, self.hidden, seqs=seqs)
         return y_hat
 
     def _process_output(self, lstm_out):
@@ -118,7 +179,7 @@ class PredModel(nn.Module):
         return ws, means, covariance_mat, e_t
 
     @torch.no_grad()
-    def generate(self, seed, device):
+    def generate(self, seed, device, seqs=None):
         torch.manual_seed(seed)
         np.random.seed(seed)
         inp = torch.zeros(3, device=device).unsqueeze(0).unsqueeze(0)
@@ -128,7 +189,7 @@ class PredModel(nn.Module):
         )
         out = []
         for i in range(700):
-            y_hat, (h_n, c_n) = self.lstm(inp, (h_n, c_n))
+            y_hat, (h_n, c_n) = self.lstm(inp, (h_n, c_n), seqs=seqs)
             ws, means, (std_1, std_2, corr), e_t = self._process_output(y_hat)
 
             ws = ws.squeeze().exp()
