@@ -57,31 +57,33 @@ class SkipLSTM(nn.Module):
                 np.array([self.c_size, self.c_size, self.c_size]) * win_size
             )
             self.win_hidden_proj = nn.Linear(57, hidden_size, bias=False)
+            # self.layers[0] = nn.LSTMCell(hidden_size, hidden_size)
 
     def compute_wt(self, seqs, h):
         # seqs: shape(b, s_u, 57)
         def _phi_u(u, alpha, beta, keta):
             # u : (s_u)
-            # alpha: (b, s, 10, 1)
+            # alpha: (b, 10, 1)
             # u = u.unsqueeze(1)
             ans = alpha - beta * (keta - u) ** 2
-            ans = ans.sum(-2)
+            ans = ans.exp().sum(1)
             return ans
 
+        h = h.squeeze(1)
         proj = self.window_proj(h)
-        b, s, _ = proj.shape
+        b, _ = proj.shape
         # b, s, mixtures
         alpha, beta, keta = torch.split(proj, self.win_splits, dim=-1)
-        alpha = alpha.view(b, s, self.win_size, -1)
-        beta = beta.exp().view(b, s, self.win_size, -1)
-        keta = keta.exp().view(b, s, self.win_size, -1).cumsum(1)
+        alpha = alpha.view(b, self.win_size, -1)
+        beta = beta.exp().view(b, self.win_size, -1)
+        keta = keta.exp().view(b, self.win_size, -1).cumsum(1)
 
         u_len = seqs.shape[1]
         phi_u = _phi_u(torch.arange(u_len, device=alpha.device), alpha, beta, keta)
         # shape = b, s, s_u
-        w_t = phi_u.unsqueeze(-1) * seqs.unsqueeze(1)
-        w_t = w_t.sum(2)
-        return w_t  # shape b, s, 57
+        w_t = phi_u.unsqueeze(-1) * seqs
+        w_t = w_t.sum(-2)
+        return w_t.unsqueeze(1)  # shape b, 57
 
     def forward(self, x, hs=None, seqs=None):
         last_inp = None
