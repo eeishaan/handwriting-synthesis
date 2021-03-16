@@ -4,7 +4,7 @@ import pathlib
 import shutil
 import time
 
-import fire
+import sys
 import torch
 from torch.nn.functional import binary_cross_entropy, binary_cross_entropy_with_logits
 from torch.nn.utils import clip_grad_norm_
@@ -44,7 +44,8 @@ def train(second_stage: bool = False):
         labels = labels[:, 1:].to(device)
         label_mask = label_mask[:, 1:].to(device)
         input_mask = input_mask[:, :-1].to(device)
-
+        if second_stage:
+            seqs = seqs.to(device)
         out = model(x[:, :-1, :], seqs)
 
         out.retain_grad()
@@ -84,13 +85,13 @@ def train(second_stage: bool = False):
 
         for batch_val in loader:
 
+            model.reset()
             if not with_texts:
                 all_x, all_labels, all_label_mask, all_input_mask = batch_val
                 xs = torch.split(all_x, bptt_steps, 1)
                 ls = torch.split(all_labels, bptt_steps, 1)
                 i_ms = torch.split(all_input_mask, bptt_steps, 1)
                 l_ms = torch.split(all_label_mask, bptt_steps, 1)
-                model.reset()
                 for i, (x, labels, input_mask, label_mask) in enumerate(
                     zip(xs, ls, i_ms, l_ms)
                 ):
@@ -107,7 +108,9 @@ def train(second_stage: bool = False):
                 p_loss += prob_loss
                 epoch_sse += sse
 
-        len_batches = len(loader) * len(xs)
+        len_batches = len(loader)
+        if not with_texts:
+            len_batches *= len(xs)
         e_loss /= len_batches
         p_loss /= len_batches
         epoch_loss = e_loss + p_loss
@@ -124,4 +127,4 @@ def train(second_stage: bool = False):
 
 
 if __name__ == "__main__":
-    fire.Fire(train)
+    train(eval(sys.argv[1]))
