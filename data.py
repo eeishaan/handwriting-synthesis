@@ -9,6 +9,18 @@ from torch.utils.data import DataLoader, Dataset
 
 from constants import BATCH_FIRST
 
+L_MAP = {c: label for label, c in enumerate(string.ascii_letters)}
+
+
+def get_embedding(l):
+    def get_label(x):
+        return L_MAP.get(x, 56)
+
+    labels = list(map(get_label, l))
+    hot = np.zeros((len(labels), 57), dtype=np.float32)
+    hot[np.arange(len(labels)), labels] = 1
+    return hot
+
 
 class StrokeDataset(Dataset):
     def __init__(self, file, is_norm=True, with_texts=False):
@@ -39,9 +51,7 @@ class StrokeDataset(Dataset):
 
             one_hot = []
             for i, l in enumerate(texts):
-                labels = list(map(get_label, l))
-                hot = np.zeros((len(labels), 57))
-                hot[np.arange(len(labels)), labels] = 1
+                hot = get_embedding(l)
                 one_hot.append(hot)
             self.texts = one_hot
 
@@ -81,6 +91,7 @@ def collate_sequence(inp):
         inp.sort(key=_cmp, reverse=True)
         batch = [b[0] for b in inp]
         chars = [b[1] for b in inp]
+        chars = pad_sequence(chars, batch_first=BATCH_FIRST)
     else:
 
         def _cmp(x):
