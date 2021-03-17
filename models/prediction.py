@@ -59,7 +59,8 @@ class SkipLSTM(nn.Module):
             self.win_hidden_proj = nn.Linear(57, hidden_size, bias=False)
             # self.layers[0] = nn.LSTMCell(hidden_size, hidden_size)
 
-    def compute_wt(self, seqs, h):
+    @torch.jit.script
+    def compute_wt(self, seqs, h, ret_phi=False):
         # seqs: shape(b, s_u, 57)
         def _phi_u(u, alpha, beta, keta):
             # u : (s_u)
@@ -83,7 +84,42 @@ class SkipLSTM(nn.Module):
         # shape = b, s, s_u
         w_t = phi_u.unsqueeze(-1) * seqs
         w_t = w_t.sum(-2)
-        return w_t.unsqueeze(1)  # shape b, 57
+        res = (w_t.unsqueeze(1),)  # shape b, 57
+        if ret_phi:
+            res += (phi_u,)
+        return res
+
+    @torch.jit.script
+    @staticmethod
+    def _lstm_step(layer, hs, inp):
+        return layer(inp) if hs is None else layer(inp, (hs[0], hs[1]))
+
+    @torch.jit.script
+    def _one_step_wt(self, x, _hs, seqs, ret_phi=False):
+        h_1, _hs = self._lstm_step(self.layers[0], _hs, x)
+        res = self.compute_wt(seqs, h_1, ret_phi)
+        w_1 = self.win_hidden_proj(res[0] if isinstance(res, tuple) else res)
+        ret = (
+            w_1,
+            h_1,
+            _hs,
+        )
+        if ret_phi:
+            ret += (res[1],)
+        return ret
+
+    def run_first_layer(self, x, _hs, seqs):
+        _, s, _ = x.shape
+        last_w = 0
+        h_final = torch.zeros_like(x)
+        w_t = torch.zeros_like(x)
+        for start in range(s):
+            inp = last_w + x[:, start : start + 1, :]
+            last_w, h_1, _hs = self._one_step_wt(inp, _hs, seqs)
+            h_final[:, start : start + 1, :] = h_1
+            w_t[:, start : start + 1, :] = last_w
+        output_proj = self.final_projs[0](h_final)
+        return w_t, h_final, _hs, output_proj
 
     def forward(self, x, hs=None, seqs=None):
         last_inp = None
@@ -92,26 +128,13 @@ class SkipLSTM(nn.Module):
         c_stack = []  # if hs is None else [hs[1]]
         x = self.input_proj(x)
 
-        def _lstm_step(layer, hs, inp):
-            return layer(inp) if hs is None else layer(inp, (hs[0], hs[1]))
-
         for i, layer in enumerate(self.layers):
             _hs = (hs[0][i : i + 1].detach(), hs[1][i : i + 1].detach()) if hs else None
             if i == 0 and self.with_texts:
                 # send only 1 time step
-                _, s, _ = x.shape
-                last_w = 0
-                h_final = torch.zeros_like(x)
-                w_t = torch.zeros_like(x)
-                for start in range(s):
-                    inp = last_w + x[:, start : start + 1, :]
-                    h_1, _hs = _lstm_step(layer, _hs, inp)
-                    w_1 = self.compute_wt(seqs, h_1)
-                    last_w = self.win_hidden_proj(w_1)
-                    h_final[:, start : start + 1, :] = h_1
-                    w_t[:, start : start + 1, :] = last_w
+                w_t, h_final, _hs, output_proj = self.run_first_layer(x, _hs, seqs)
                 last_inp = h_final
-                running_skip = running_skip + self.final_projs[i](last_inp)
+                running_skip = running_skip + output_proj
                 h_stack.append(_hs[0])
                 c_stack.append(_hs[1])
                 continue
@@ -120,7 +143,7 @@ class SkipLSTM(nn.Module):
                 inp = inp + last_inp
                 if self.with_texts:
                     inp = inp + w_t
-            output, (_h, _c) = _lstm_step(layer, _hs, inp)
+            output, (_h, _c) = self._lstm_step(layer, _hs, inp)
             h_stack.append(_h)
             c_stack.append(_c)
             last_inp = output
@@ -181,7 +204,61 @@ class PredModel(nn.Module):
         return ws, means, covariance_mat, e_t
 
     @torch.no_grad()
-    def generate(self, seed, device, seqs=None):
+    def generate_with_seq(self, seed, device, seqs):
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        x = torch.zeros(3, device=device).unsqueeze(0).unsqueeze(0)
+        # _hs = (
+        #     torch.zeros(self.num_layers, 1, self.hidden_dim, device=device),
+        #     torch.zeros(self.num_layers, 1, self.hidden_dim, device=device),
+        # )
+        out = [x]
+        last_w = 0
+        hs = None
+        seqs = torch.cat([seqs, torch.zeros(1, 1, 57, device=device)], axis=1)
+        while True:
+            h_stack = []
+            c_stack = []
+            inp = self.lstm.input_proj(x) + last_w
+            _hs = (hs[0][:1].detach(), hs[1][:1].detach()) if hs else None
+            last_w, h_1, _hs, phi = self.lstm._one_step_wt(inp, _hs, seqs, ret_phi=True)
+            h_stack.append(_hs[0])
+            c_stack.append(_hs[1])
+            if (phi[0, -1] > phi[0, :-1]).all():
+                break
+            running_skip = self.lstm.final_projs[0](h_1)
+
+            last_inp = h_1
+            inp = self.lstm.input_proj(x) + last_w
+            for i, layer in enumerate(self.lstm.layers[1:]):
+                _hs = (
+                    (hs[0][i + 1 : i + 2].detach(), hs[1][i + 1 : i + 2].detach())
+                    if hs
+                    else None
+                )
+                layer_inp = inp + last_inp
+                output, (_h, _c) = self.lstm._lstm_step(layer, _hs, layer_inp)
+                h_stack.append(_h)
+                c_stack.append(_c)
+                last_inp = output
+                running_skip = running_skip + self.lstm.final_projs[i + 1](output)
+            y_hat = running_skip + self.lstm.bias
+            hs = (torch.cat(h_stack), torch.cat(c_stack))
+
+            ws, means, (std_1, std_2, corr), e_t = self._process_output(y_hat)
+
+            ws = ws.squeeze().exp()
+            j = torch.multinomial(ws, 1)[0]
+            x_nt = means[..., j, :]
+            u = torch.rand(1)[0]
+            e_t[e_t <= u] = 0
+            e_t[e_t > u] = 1
+            x = torch.cat([e_t.unsqueeze(0), x_nt], axis=-1)
+            out.append(x)
+        return out
+
+    @torch.no_grad()
+    def generate(self, seed, device):
         torch.manual_seed(seed)
         np.random.seed(seed)
         inp = torch.zeros(3, device=device).unsqueeze(0).unsqueeze(0)
