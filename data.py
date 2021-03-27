@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
-from constants import BATCH_FIRST
+from constants import BATCH_FIRST, EMBED_DIM
 
 L_MAP = {c: label for label, c in enumerate(string.ascii_letters)}
 
@@ -17,8 +17,14 @@ def get_embedding(l):
         return L_MAP.get(x, 56)
 
     labels = list(map(get_label, l))
-    hot = np.zeros((len(labels), 57), dtype=np.float32)
+    hot = np.zeros((len(labels), EMBED_DIM), dtype=np.float32)
     hot[np.arange(len(labels)), labels] = 1
+    stop_marker = np.zeros(EMBED_DIM)
+    stop_marker[-1] = 1
+    if l[-1] == "\n":
+        hot[-1] = stop_marker
+    else:
+        hot = np.concatenate([hot, stop_marker[np.newaxis, :]], 0)
     return hot
 
 
@@ -27,8 +33,9 @@ class StrokeDataset(Dataset):
         global largest_sequence
         self.data = np.load(file, allow_pickle=True)
 
-        data = list(self.data)
-        data.sort(key=lambda x: x.shape[0], reverse=True)
+        idxs = list(range(self.data.shape[0]))
+        idxs.sort(key=lambda x: self.data[x].shape[0], reverse=True)
+        data = self.data[idxs]
 
         self.with_texts = with_texts
         if is_norm:
@@ -44,6 +51,9 @@ class StrokeDataset(Dataset):
             s_file = os.path.join(os.path.dirname(file), "sentences.txt")
             with open(s_file) as fob:
                 texts = fob.readlines()
+
+            texts = [texts[i] for i in idxs]
+            self._lines = texts
             l_map = {c: label for label, c in enumerate(string.ascii_letters)}
 
             def get_label(x):
@@ -56,7 +66,7 @@ class StrokeDataset(Dataset):
             self.texts = one_hot
 
         self.data = data
-        self.chunk_len = 700 if not self.with_texts else None
+        self.chunk_len = None  # 700 if not self.with_texts else None
 
     def __len__(self) -> int:
         return len(self.data)
@@ -71,7 +81,7 @@ class StrokeDataset(Dataset):
                 start = np.random.randint(max_len)
             end = start + self.chunk_len
             new_data = new_data[start:end, :]
-        # new_data = np.pad(new_data, ((1, 0), (0, 0)))
+        new_data = np.pad(new_data, ((1, 0), (0, 0)))
         res = torch.from_numpy(new_data)
         if self.with_texts:
             res = (res, torch.from_numpy(self.texts[index]))
