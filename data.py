@@ -92,7 +92,7 @@ def collate_sequence(inp):
 
     # data = list(self.data)
     with_chars = isinstance(inp[0], tuple)
-
+    chars = None
     if with_chars:
 
         def _cmp(x):
@@ -115,10 +115,7 @@ def collate_sequence(inp):
     # pad them
     padded = pad_sequence(batch, batch_first=BATCH_FIRST)
 
-    # spearate out the labels
-    labels = padded[:, :, 0]
     coordinates = padded[:, :, :]
-    # make label mask
 
     # remove one for training, as we can't predict for the last label
     max_len = padded.shape[1]
@@ -128,7 +125,6 @@ def collate_sequence(inp):
     ).unsqueeze(1)
     label_mask[:, 0] = False
 
-    # max_len = -1
     input_mask = torch.arange(max_len).expand(len(lens), max_len) < (
         torch.Tensor(lens) - 1
     ).unsqueeze(1)
@@ -136,12 +132,10 @@ def collate_sequence(inp):
     # dispatch
     res = (
         coordinates,
-        labels,
         label_mask,
         input_mask,
+        chars,
     )
-    if with_chars:
-        res += (chars,)
     return res
 
 
