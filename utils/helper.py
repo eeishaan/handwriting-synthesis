@@ -48,8 +48,11 @@ def sse_x(target, w, means):
     )  # compute error for each dim separately
 
 
+@torch.no_grad()
 def plot_grad_flow(named_parameters):
-    """Plots the gradients flowing through different layers in the net during training.
+    """
+    From: https://discuss.pytorch.org/t/check-gradient-flow-in-network/15063/10
+    Plots the gradients flowing through different layers in the net during training.
     Can be used for checking for possible gradient vanishing / exploding problems.
 
     Usage: Plug this function in Trainer class after loss.backwards() as
