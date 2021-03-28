@@ -51,7 +51,7 @@ def generate_conditionally(text="welcome to lyrebird", random_seed=1):
     model.eval()
     seq = torch.from_numpy(get_embedding(text)).unsqueeze(0).float()
 
-    x = model.generate_with_seq(random_seed, device, seqs=seq, bias=0)
+    x = model.generate_with_seq(random_seed, device, seqs=seq, bias=2)
     x = torch.cat(x, axis=0).squeeze()
     inv = inverse_transform(x[:, 1:])
     x = torch.cat([x[:, 0:1], inv], axis=1)
