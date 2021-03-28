@@ -1,6 +1,6 @@
 import torch
-from torch.functional import Tensor
 import torch.nn as nn
+from torch.functional import Tensor
 
 
 def mult_normal_sample(mean, std_1, std_2, corr):
