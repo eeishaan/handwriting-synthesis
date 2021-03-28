@@ -22,7 +22,7 @@ _Bonjour! On y va?_ : ![](asset/co_4.png)
 
 
 ### Usage
-- Place data (``sentences.txt`` and strokes-py3.npy``) in ``data/`` directory.
+- Place data (``sentences.txt`` and ``strokes-py3.npy``) in ``data/`` directory.
 - Use `train.py` script to train the model.
 - Runs are saved in `runs/` directory.
 - To generate above samples, use `models/dummy.py`
