@@ -5,6 +5,9 @@ import torch.nn as nn
 from matplotlib.lines import Line2D
 from torch.functional import Tensor
 
+_mean_ = np.array([0.41248123, -0.00600316])
+_scale_ = np.array([2.07864733, 1.85605669])
+
 
 def mult_normal_sample(mean, std_1, std_2, corr):
     std_1.squeeze_()
@@ -97,3 +100,9 @@ def surgery(old_model, new_model):
     new_model.lstm.final_projs[0].bias[...] = old_model.lstm.final_projs[0].bias[...]
     new_model.lstm.bias[...] = old_model.lstm.bias[...]
     return new_model
+
+
+def inverse_transform(x):
+    x *= _scale_
+    x += _mean_
+    return x

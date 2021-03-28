@@ -8,7 +8,6 @@ from torch.nn.functional import binary_cross_entropy_with_logits
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 
-from constants import BATCH_FIRST
 from data import get_loader
 from models.prediction import PredModel
 from utils.helper import surgery as surgery_fn

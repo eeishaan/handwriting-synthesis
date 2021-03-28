@@ -292,9 +292,9 @@ class PredModel(nn.Module):
             ws = ws.squeeze().exp()
             j = torch.multinomial(ws, 1)[0]
             x_nt = means[..., j, :]
-            std_1 = std_1[j]
-            std_2 = std_2[j]
-            corr = corr[j]
+            std_1 = std_1[..., j]
+            std_2 = std_2[..., j]
+            corr = corr[..., j]
 
             x_nt = mult_normal_sample(x_nt, std_1, std_2, corr)
             u = 0.5
