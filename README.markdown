@@ -1,6 +1,6 @@
 # Handwriting synthesis
 
-This is an implementation of ["Generating Sequences With Recurrent Neural Networks" paper by Alex Graves](https://arxiv.org/abs/1308.0850)
+This is an implementation of sec.4 and 5 of ["Generating Sequences With Recurrent Neural Networks" paper by Alex Graves](https://arxiv.org/abs/1308.0850)
 
 ### Generated samples
 
@@ -14,6 +14,7 @@ Setting: ``bias=0.2, seed=range(5)``
 
 #### Conditional samples 
 Setting: ``bias=2, seed=range(5)``
+
 _Strength means blessed with an enemy_ : ![](asset/co_0.png)
 _words are wind!_ : ![](asset/co_1.png)
 _Bridged by a lightwave_ : ![](asset/co_2.png)
